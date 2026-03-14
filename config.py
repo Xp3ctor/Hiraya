@@ -7,10 +7,10 @@ DB_CONFIG = {
     "user": os.getenv("MYSQLUSER"),
     "password": os.getenv("MYSQLPASSWORD"),
     "database": os.getenv("MYSQLDATABASE"),
-    "port": int(os.getenv("MYSQLPORT", "3306")),
+    "port": int(os.getenv("MYSQLPORT")),
 }
 
-EMOJI_STORAGE_GUILD_ID = int(os.getenv("EMOJI_STORAGE_GUILD_ID", "1145734578363961455"))
+EMOJI_STORAGE_GUILD_ID = int(os.getenv("EMOJI_STORAGE_GUILD_ID"))
 CHEST_EMOJI_NAME = "raya_chest"
 
 PREFIXES = ("h! ", "H! ", "h!", "H!")
