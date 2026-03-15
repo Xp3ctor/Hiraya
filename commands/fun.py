@@ -37,14 +37,13 @@ class Fun(commands.Cog):
         )
 
         embed.add_field(
-            name="Prefixes",
-            value="`h!ping`, `H!ping`, `h! ping`, and `H! ping` all work.",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Fun",
-            value="`ping`\n`hello`\n`roll`\n`8ball <question>`\n`meme`\n`help` / `command`",
+            name="Adventure",
+            value=(
+                "`startadventure`\n"
+                "`profile [@user]`\n"
+                "`places`\n"
+                "`travel <1-5>`"
+            ),
             inline=False
         )
 
@@ -55,7 +54,9 @@ class Fun(commands.Cog):
                 "`daily`\n"
                 "`work`\n"
                 "`give @user <amount>`\n"
-                "`shop`\n"
+                "`shop items`\n"
+                "`shop rods`\n"
+                "`shop shovels`\n"
                 "`buy <item> [amount]`\n"
                 "`use <item>`\n"
                 "`sell <item> [amount]`\n"
@@ -63,10 +64,31 @@ class Fun(commands.Cog):
                 "`sellallfish`\n"
                 "`inventory` / `inv`\n"
                 "`fish`\n"
+                "`dig`\n"
                 "`leaderboard` / `lb`\n"
                 "`fishleaderboard` / `fishlb`"
             ),
-            inline=True
+            inline=False
+        )
+
+        embed.add_field(
+            name="Fun",
+            value="`ping`\n`hello`\n`roll`\n`8ball <question>`\n`meme`",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Admin",
+            value=(
+                "`setcoins @user <amount>`\n"
+                "`addcoins @user <amount>`\n"
+                "`giveitem @user <item> [amount]`\n"
+                "`removeitem @user <item> [amount]`\n"
+                "`addshopitem <item> <price> <category> <description>`\n"
+                "`removeshopitem <item>`\n"
+                "`resetallusers`"
+            ),
+            inline=False
         )
 
         await ctx.send(embed=embed)
@@ -81,13 +103,11 @@ class Fun(commands.Cog):
 
     @commands.command()
     async def roll(self, ctx):
-        number = random.randint(1, 6)
-        await ctx.send(f"🎲 You rolled **{number}**")
+        await ctx.send(f"🎲 You rolled **{random.randint(1, 6)}**")
 
     @commands.command(name="8ball")
     async def eight_ball(self, ctx, *, question):
-        answer = random.choice(EIGHT_BALL_ANSWERS)
-        await ctx.send(f"🎱 **Question:** {question}\n**Answer:** {answer}")
+        await ctx.send(f"🎱 **Question:** {question}\n**Answer:** {random.choice(EIGHT_BALL_ANSWERS)}")
 
     @commands.command()
     async def meme(self, ctx):
