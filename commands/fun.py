@@ -32,7 +32,7 @@ class Fun(commands.Cog):
     async def help_command(self, ctx):
         embed = discord.Embed(
             title="Bot Commands",
-            description="Here are the available commands.",
+            description="Here are the available commands. BOT PREFIX -> h!",
             color=discord.Color.blue()
         )
 
