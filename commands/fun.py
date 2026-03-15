@@ -57,6 +57,7 @@ class Fun(commands.Cog):
                 "`give @user <amount>`\n"
                 "`shop`\n"
                 "`buy <item> [amount]`\n"
+                "`use <item>`\n"
                 "`sell <item> [amount]`\n"
                 "`sellall <item>`\n"
                 "`sellallfish`\n"
