@@ -1,5 +1,6 @@
 import asyncio
 import random
+import math
 from datetime import timedelta
 
 import discord
@@ -13,10 +14,11 @@ from database import (
     get_shop_items, get_shop_item, get_sell_price,
     get_top_coin_users, get_top_fish_users, get_item_display,
     get_chest_thumbnail_url, refresh_shop_stock_if_needed,
-    reduce_shop_stock, FISH_NAMES, FISH_SELL_PRICES
+    reduce_shop_stock, FISH_NAMES, FISH_SELL_PRICES,
+    get_luck_boost_until, set_luck_boost_until
 )
 
-FISH_TABLE = [
+NORMAL_FISH_TABLE = [
     {"name": "Nothing",        "weight": 100, "quantity": (0, 0), "emoji_fallback": "🌊"},
     {"name": "Common Fish",    "weight": 300, "quantity": (2, 5), "emoji_fallback": "🐟"},
     {"name": "Uncommon Fish",  "weight": 250, "quantity": (2, 4), "emoji_fallback": "🐠"},
@@ -26,13 +28,24 @@ FISH_TABLE = [
     {"name": "Mythical Fish",  "weight": 10,  "quantity": (1, 1), "emoji_fallback": "✨"},
 ]
 
+BOOSTED_FISH_TABLE = [
+    {"name": "Nothing",        "weight": 60,  "quantity": (0, 0), "emoji_fallback": "🌊"},
+    {"name": "Common Fish",    "weight": 240, "quantity": (2, 5), "emoji_fallback": "🐟"},
+    {"name": "Uncommon Fish",  "weight": 260, "quantity": (2, 4), "emoji_fallback": "🐠"},
+    {"name": "Rare Fish",      "weight": 240, "quantity": (1, 3), "emoji_fallback": "🦈"},
+    {"name": "Epic Fish",      "weight": 140, "quantity": (1, 2), "emoji_fallback": "🐡"},
+    {"name": "Legendary Fish", "weight": 50,  "quantity": (1, 1), "emoji_fallback": "🐉"},
+    {"name": "Mythical Fish",  "weight": 10,  "quantity": (1, 1), "emoji_fallback": "✨"},
+]
 
-def roll_fish():
-    total_weight = sum(entry["weight"] for entry in FISH_TABLE)
+
+def roll_fish(use_luck_boost=False):
+    fish_table = BOOSTED_FISH_TABLE if use_luck_boost else NORMAL_FISH_TABLE
+    total_weight = sum(entry["weight"] for entry in fish_table)
     roll = random.randint(1, total_weight)
 
     current = 0
-    for entry in FISH_TABLE:
+    for entry in fish_table:
         current += entry["weight"]
         if roll <= current:
             min_qty, max_qty = entry["quantity"]
@@ -48,6 +61,67 @@ def roll_fish():
         "emoji_fallback": "🌊",
         "quantity": 0
     }
+
+
+class ShopView(discord.ui.View):
+    def __init__(self, bot, author_id, items, refreshed=False):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.author_id = author_id
+        self.items = items
+        self.page = 0
+        self.per_page = 4
+        self.refreshed = refreshed
+        self.max_page = max(0, math.ceil(len(items) / self.per_page) - 1)
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_button.disabled = self.page <= 0
+        self.next_button.disabled = self.page >= self.max_page
+
+    def make_embed(self):
+        desc = "Available items:"
+        if self.refreshed:
+            desc += "\n🔄 Shop stock has been refreshed."
+
+        embed = discord.Embed(
+            title="🛒 Shop",
+            description=desc,
+            color=discord.Color.green()
+        )
+
+        start = self.page * self.per_page
+        end = start + self.per_page
+        page_items = self.items[start:end]
+
+        for row in page_items:
+            item_display = get_item_display(self.bot, row["item_name"])
+            embed.add_field(
+                name=f"{item_display} {row['item_name'].title()} - {row['price']} coins",
+                value=f"{row['description'] or 'No description.'}\n**Stock:** {row['stock']}",
+                inline=False
+            )
+
+        embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1}")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ This shop menu is not yours.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.secondary)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page -= 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+    @discord.ui.button(label="➡️", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page += 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.make_embed(), view=self)
 
 
 class Economy(commands.Cog):
@@ -81,9 +155,7 @@ class Economy(commands.Cog):
         remove_balance(ctx.author.id, amount)
         add_balance(member.id, amount)
 
-        await ctx.send(
-            f"💸 {ctx.author.mention} gave **{amount}** coins to {member.mention}."
-        )
+        await ctx.send(f"💸 {ctx.author.mention} gave **{amount}** coins to {member.mention}.")
 
     @commands.command()
     async def daily(self, ctx):
@@ -128,25 +200,8 @@ class Economy(commands.Cog):
             await ctx.send("🛒 The shop is empty.")
             return
 
-        desc = "Available items:"
-        if refreshed:
-            desc += "\n🔄 Shop stock has been refreshed."
-
-        embed = discord.Embed(
-            title="🛒 Shop",
-            description=desc,
-            color=discord.Color.green()
-        )
-
-        for row in items:
-            item_display = get_item_display(self.bot, row["item_name"])
-            embed.add_field(
-                name=f"{item_display} {row['item_name'].title()} - {row['price']} coins",
-                value=f"{row['description'] or 'No description.'}\n**Stock:** {row['stock']}",
-                inline=False
-            )
-
-        await ctx.send(embed=embed)
+        view = ShopView(self.bot, ctx.author.id, items, refreshed=refreshed)
+        await ctx.send(embed=view.make_embed(), view=view)
 
     @commands.command()
     async def buy(self, ctx, *, item_and_amount: str):
@@ -199,6 +254,41 @@ class Economy(commands.Cog):
         )
 
     @commands.command()
+    async def use(self, ctx, *, item_name: str):
+        item_name = item_name.strip().lower()
+        owned = get_item_amount(ctx.author.id, item_name)
+
+        if owned <= 0:
+            await ctx.send(f"❌ You do not have any **{item_name.title()}**.")
+            return
+
+        if item_name == "luck potion":
+            current_boost = get_luck_boost_until(ctx.author.id)
+            now = utc_now()
+
+            if current_boost and now < current_boost:
+                remaining = current_boost - now
+                await ctx.send(
+                    f"❌ You already have an active Luck Potion. Remaining time: **{format_remaining(remaining)}**."
+                )
+                return
+
+            success = remove_item(ctx.author.id, item_name, 1)
+            if not success:
+                await ctx.send("❌ Could not use that item.")
+                return
+
+            boost_until = now + timedelta(minutes=15)
+            set_luck_boost_until(ctx.author.id, boost_until)
+
+            await ctx.send(
+                f"🧪 {ctx.author.mention} used **Luck Potion**. Better fish chances for **15 minutes**!"
+            )
+            return
+
+        await ctx.send("❌ That item cannot be used right now.")
+
+    @commands.command()
     async def sell(self, ctx, *, item_and_amount: str):
         parts = item_and_amount.rsplit(" ", 1)
 
@@ -234,9 +324,7 @@ class Economy(commands.Cog):
 
         add_balance(ctx.author.id, total)
         item_display = get_item_display(self.bot, item_name)
-        await ctx.send(
-            f"💸 You sold **{amount} {item_display} {item_name.title()}** for **{total}** coins."
-        )
+        await ctx.send(f"💸 You sold **{amount} {item_display} {item_name.title()}** for **{total}** coins.")
 
     @commands.command()
     async def sellall(self, ctx, *, item_name: str):
@@ -262,9 +350,7 @@ class Economy(commands.Cog):
         add_balance(ctx.author.id, total)
         item_display = get_item_display(self.bot, item_name)
 
-        await ctx.send(
-            f"💸 You sold **all {owned} {item_display} {item_name.title()}** for **{total}** coins."
-        )
+        await ctx.send(f"💸 You sold **all {owned} {item_display} {item_name.title()}** for **{total}** coins.")
 
     @commands.command()
     async def sellallfish(self, ctx):
@@ -332,7 +418,7 @@ class Economy(commands.Cog):
 
         embed = discord.Embed(
             title="Inventory",
-            description="Type `h!sell <item_name> [amount]`, `h!sellall <item_name>`, or `h!sellallfish`.",
+            description="Type `h!use <item>`, `h!sell <item> [amount]`, `h!sellall <item>`, or `h!sellallfish`.",
             color=discord.Color.from_rgb(43, 45, 49)
         )
 
@@ -363,23 +449,34 @@ class Economy(commands.Cog):
 
         set_last_fish(ctx.author.id, now)
 
+        active_luck_boost = get_luck_boost_until(ctx.author.id)
+        use_luck = active_luck_boost is not None and now < active_luck_boost
+
         wait_time = random.randint(3, 5)
         cast_message = await ctx.send(f"🎣 {ctx.author.mention} cast a line... waiting for a bite.")
         await asyncio.sleep(wait_time)
 
-        result = roll_fish()
+        result = roll_fish(use_luck_boost=use_luck)
 
         if result["name"] == "Nothing":
-            await cast_message.edit(content=f"🌊 {ctx.author.mention} waited **{wait_time}s** and caught **nothing**.")
+            if use_luck:
+                await cast_message.edit(
+                    content=f"🌊 {ctx.author.mention} used luck but still caught **nothing** after **{wait_time}s**."
+                )
+            else:
+                await cast_message.edit(
+                    content=f"🌊 {ctx.author.mention} waited **{wait_time}s** and caught **nothing**."
+                )
             return
 
         add_item(ctx.author.id, result["name"], result["quantity"])
 
         item_display = get_item_display(self.bot, result["name"])
+        extra = " 🧪(Luck Boost)" if use_luck else ""
         await cast_message.edit(
             content=(
                 f"{item_display} {ctx.author.mention} waited **{wait_time}s** and caught "
-                f"**{result['quantity']} {result['name']}**."
+                f"**{result['quantity']} {result['name']}**.{extra}"
             )
         )
 
@@ -425,6 +522,7 @@ class Economy(commands.Cog):
     @sell.error
     @sellall.error
     @give.error
+    @use.error
     async def item_error(self, ctx, error):
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.send("❌ Missing required arguments.")
