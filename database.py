@@ -21,21 +21,21 @@ FISH_NAMES = {
 }
 
 FISH_SELL_PRICES = {
-    "common fish": 8,
-    "uncommon fish": 18,
-    "rare fish": 45,
-    "epic fish": 120,
-    "legendary fish": 400,
-    "mythical fish": 2500
+    "common fish": 2,
+    "uncommon fish": 5,
+    "rare fish": 10,
+    "epic fish": 30,
+    "legendary fish": 150,
+    "mythical fish": 1000
 }
 
 FISH_XP = {
-    "common fish": 5,
-    "uncommon fish": 8,
-    "rare fish": 15,
-    "epic fish": 30,
-    "legendary fish": 60,
-    "mythical fish": 120
+    "common fish": 1,
+    "uncommon fish": 2,
+    "rare fish": 5,
+    "epic fish": 10,
+    "legendary fish": 20,
+    "mythical fish": 50
 }
 
 FISH_EMOJI_NAMES = {
@@ -66,41 +66,62 @@ ITEM_EMOJIS = {
     "trash": "🗑️"
 }
 
+ROD_LUCK = {
+    "old rod": 0,
+    "iron rod": 5,
+    "gold rod": 10,
+    "crystal rod": 18,
+    "mythic rod": 30
+}
+
+SHOVEL_LUCK = {
+    "old shovel": 0,
+    "iron shovel": 5,
+    "gold shovel": 10,
+    "crystal shovel": 18,
+    "ancient shovel": 30
+}
+
 PLACES = {
     1: {
         "name": "Fishing Village",
         "required_level": 1,
         "required_coins": 0,
         "required_rod": "old rod",
-        "story": "A quiet seaside village where every journey begins."
+        "story": "A quiet seaside village where every journey begins.",
+        "luck_bonus": 0
     },
     2: {
         "name": "Pebble Shore",
-        "required_level": 3,
-        "required_coins": 500,
+        "required_level": 5,
+        "required_coins": 5000,
         "required_rod": "iron rod",
-        "story": "The waves are rougher here, but better catches await."
+        "story": "The waves are rougher here, but better catches await.",
+        "luck_bonus": 5
     },
     3: {
         "name": "Coral Bay",
-        "required_level": 7,
-        "required_coins": 2500,
+        "required_level": 15,
+        "required_coins": 8000,
         "required_rod": "gold rod",
-        "story": "Bright coral reefs hide richer fish and deeper secrets."
+        "story": "Bright coral reefs hide richer fish and deeper secrets.",
+        "luck_bonus": 10
     },
     4: {
         "name": "Sunken Cavern",
-        "required_level": 12,
-        "required_coins": 7000,
+        "required_level": 20,
+        "required_coins": 15000,
         "required_rod": "crystal rod",
-        "story": "Dark waters and broken ruins challenge even skilled anglers."
+        "story": "Dark waters and broken ruins challenge even skilled anglers.",
+        "luck_bonus": 18
     },
     5: {
         "name": "Mythic Depths",
-        "required_level": 20,
+        "required_level": 30,
         "required_coins": 20000,
         "required_rod": "mythic rod",
-        "story": "Only legends return from these waters with proof of what lives below."
+        "story": "Only legends return from these waters with proof of what lives below.",
+        "luck_bonus": 30
     }
 }
 
@@ -231,6 +252,28 @@ def set_current_place(user_id: int, place_id: int):
     cur = conn.cursor()
     try:
         cur.execute("UPDATE users SET current_place = %s WHERE user_id = %s", (place_id, str(user_id)))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_equipped_rod(user_id: int, rod_name: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE users SET equipped_rod = %s WHERE user_id = %s", (rod_name.lower(), str(user_id)))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_equipped_shovel(user_id: int, shovel_name: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE users SET equipped_shovel = %s WHERE user_id = %s", (shovel_name.lower(), str(user_id)))
         conn.commit()
     finally:
         cur.close()
