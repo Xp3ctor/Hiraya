@@ -70,27 +70,13 @@ class Fun(commands.Cog):
                 "`leaderboard` / `lb`\n"
                 "`fishleaderboard` / `fishlb`"
             ),
-            inline=False
+            inline=True
         )
 
         embed.add_field(
             name="Fun",
             value="`ping`\n`hello`\n`roll`\n`8ball <question>`\n`meme`",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Admin",
-            value=(
-                "`setcoins @user <amount>`\n"
-                "`addcoins @user <amount>`\n"
-                "`giveitem @user <item> [amount]`\n"
-                "`removeitem @user <item> [amount]`\n"
-                "`addshopitem <item> <price> <category> <description>`\n"
-                "`removeshopitem <item>`\n"
-                "`resetallusers`"
-            ),
-            inline=False
+            inline=True
         )
 
         await ctx.send(embed=embed)
