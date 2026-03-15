@@ -10,65 +10,89 @@ from database import (
     utc_now, format_remaining, get_balance, add_balance, remove_balance,
     get_last_daily, set_last_daily, get_last_work, set_last_work,
     get_last_fish, set_last_fish, add_item, remove_item, get_item_amount,
-    get_inventory, get_inventory_item_rows,
-    get_shop_items, get_shop_item, get_sell_price,
-    get_top_coin_users, get_top_fish_users, get_item_display,
-    get_chest_thumbnail_url, refresh_shop_stock_if_needed,
-    reduce_shop_stock, FISH_NAMES, FISH_SELL_PRICES,
-    get_luck_boost_until, set_luck_boost_until
+    get_inventory, get_inventory_item_rows, get_shop_items, get_shop_item,
+    get_sell_price, get_top_coin_users, get_top_fish_users, get_item_display,
+    get_chest_thumbnail_url, refresh_shop_stock_if_needed, reduce_shop_stock,
+    FISH_NAMES, FISH_SELL_PRICES, FISH_XP, get_luck_boost_until,
+    set_luck_boost_until, get_user_profile, add_xp, xp_needed_for_level,
+    PLACES, set_current_place, set_user_started, get_last_dig, set_last_dig
 )
 
+POTION_DURATIONS = {
+    "small luck potion": 15,
+    "medium luck potion": 30,
+    "large luck potion": 60
+}
+
 NORMAL_FISH_TABLE = [
-    {"name": "Nothing",        "weight": 100, "quantity": (0, 0), "emoji_fallback": "🌊"},
-    {"name": "Common Fish",    "weight": 300, "quantity": (2, 5), "emoji_fallback": "🐟"},
-    {"name": "Uncommon Fish",  "weight": 250, "quantity": (2, 4), "emoji_fallback": "🐠"},
-    {"name": "Rare Fish",      "weight": 200, "quantity": (1, 3), "emoji_fallback": "🦈"},
-    {"name": "Epic Fish",      "weight": 100, "quantity": (1, 2), "emoji_fallback": "🐡"},
-    {"name": "Legendary Fish", "weight": 40,  "quantity": (1, 1), "emoji_fallback": "🐉"},
-    {"name": "Mythical Fish",  "weight": 10,  "quantity": (1, 1), "emoji_fallback": "✨"},
+    {"name": "Nothing",        "weight": 100, "quantity": (0, 0)},
+    {"name": "Common Fish",    "weight": 300, "quantity": (2, 5)},
+    {"name": "Uncommon Fish",  "weight": 250, "quantity": (2, 4)},
+    {"name": "Rare Fish",      "weight": 200, "quantity": (1, 3)},
+    {"name": "Epic Fish",      "weight": 100, "quantity": (1, 2)},
+    {"name": "Legendary Fish", "weight": 40,  "quantity": (1, 1)},
+    {"name": "Mythical Fish",  "weight": 10,  "quantity": (1, 1)},
 ]
 
 BOOSTED_FISH_TABLE = [
-    {"name": "Nothing",        "weight": 60,  "quantity": (0, 0), "emoji_fallback": "🌊"},
-    {"name": "Common Fish",    "weight": 240, "quantity": (2, 5), "emoji_fallback": "🐟"},
-    {"name": "Uncommon Fish",  "weight": 260, "quantity": (2, 4), "emoji_fallback": "🐠"},
-    {"name": "Rare Fish",      "weight": 240, "quantity": (1, 3), "emoji_fallback": "🦈"},
-    {"name": "Epic Fish",      "weight": 140, "quantity": (1, 2), "emoji_fallback": "🐡"},
-    {"name": "Legendary Fish", "weight": 50,  "quantity": (1, 1), "emoji_fallback": "🐉"},
-    {"name": "Mythical Fish",  "weight": 10,  "quantity": (1, 1), "emoji_fallback": "✨"},
+    {"name": "Nothing",        "weight": 60,  "quantity": (0, 0)},
+    {"name": "Common Fish",    "weight": 240, "quantity": (2, 5)},
+    {"name": "Uncommon Fish",  "weight": 260, "quantity": (2, 4)},
+    {"name": "Rare Fish",      "weight": 240, "quantity": (1, 3)},
+    {"name": "Epic Fish",      "weight": 140, "quantity": (1, 2)},
+    {"name": "Legendary Fish", "weight": 50,  "quantity": (1, 1)},
+    {"name": "Mythical Fish",  "weight": 10,  "quantity": (1, 1)},
+]
+
+DIG_TABLE = [
+    {"name": "trash", "weight": 500, "quantity": (1, 3)},
+    {"name": "apple", "weight": 120, "quantity": (1, 2)},
+    {"name": "bread", "weight": 80, "quantity": (1, 2)},
+    {"name": "small luck potion", "weight": 30, "quantity": (1, 1)},
+    {"name": "medium luck potion", "weight": 12, "quantity": (1, 1)},
+    {"name": "large luck potion", "weight": 5, "quantity": (1, 1)},
+    {"name": "old rod", "weight": 6, "quantity": (1, 1)},
+    {"name": "iron rod", "weight": 3, "quantity": (1, 1)},
+    {"name": "old shovel", "weight": 6, "quantity": (1, 1)},
+    {"name": "iron shovel", "weight": 3, "quantity": (1, 1)},
 ]
 
 
-def roll_fish(use_luck_boost=False):
-    fish_table = BOOSTED_FISH_TABLE if use_luck_boost else NORMAL_FISH_TABLE
-    total_weight = sum(entry["weight"] for entry in fish_table)
-    roll = random.randint(1, total_weight)
+def make_progress_bar(current: int, needed: int, length: int = 16) -> str:
+    if needed <= 0:
+        needed = 1
+    ratio = max(0, min(1, current / needed))
+    filled = round(ratio * length)
+    return f"[{'█' * filled}{'░' * (length - filled)}] {int(ratio * 100)}%"
 
+
+def ensure_started(profile):
+    return bool(profile["adventure_started"])
+
+
+def roll_weighted(table):
+    total_weight = sum(entry["weight"] for entry in table)
+    roll = random.randint(1, total_weight)
     current = 0
-    for entry in fish_table:
+    for entry in table:
         current += entry["weight"]
         if roll <= current:
-            min_qty, max_qty = entry["quantity"]
-            quantity = random.randint(min_qty, max_qty) if max_qty > 0 else 0
-            return {
-                "name": entry["name"],
-                "emoji_fallback": entry["emoji_fallback"],
-                "quantity": quantity
-            }
+            qty = random.randint(entry["quantity"][0], entry["quantity"][1])
+            return entry["name"], qty
+    return "trash", 1
 
-    return {
-        "name": "Nothing",
-        "emoji_fallback": "🌊",
-        "quantity": 0
-    }
+
+def get_place_name(place_id: int) -> str:
+    return PLACES.get(place_id, PLACES[1])["name"]
 
 
 class ShopView(discord.ui.View):
-    def __init__(self, bot, author_id, items, refreshed=False):
+    def __init__(self, bot, author_id, items, title, refreshed=False):
         super().__init__(timeout=120)
         self.bot = bot
         self.author_id = author_id
         self.items = items
+        self.title = title
         self.page = 0
         self.per_page = 4
         self.refreshed = refreshed
@@ -85,16 +109,15 @@ class ShopView(discord.ui.View):
             desc += "\n🔄 Shop stock has been refreshed."
 
         embed = discord.Embed(
-            title="🛒 Shop",
+            title=self.title,
             description=desc,
             color=discord.Color.green()
         )
 
         start = self.page * self.per_page
         end = start + self.per_page
-        page_items = self.items[start:end]
 
-        for row in page_items:
+        for row in self.items[start:end]:
             item_display = get_item_display(self.bot, row["item_name"])
             embed.add_field(
                 name=f"{item_display} {row['item_name'].title()} - {row['price']} coins",
@@ -107,7 +130,7 @@ class ShopView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ This shop menu is not yours.", ephemeral=True)
+            await interaction.response.send_message("❌ This menu is not yours.", ephemeral=True)
             return False
         return True
 
@@ -128,85 +151,153 @@ class Economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    @commands.command()
+    async def startadventure(self, ctx):
+        profile = get_user_profile(ctx.author.id)
+        if profile["adventure_started"]:
+            await ctx.send("❌ You already started your adventure.")
+            return
+
+        set_user_started(ctx.author.id)
+        add_item(ctx.author.id, "old rod", 1)
+        add_item(ctx.author.id, "old shovel", 1)
+        add_item(ctx.author.id, "small luck potion", 1)
+
+        embed = discord.Embed(
+            title="🌊 Adventure Started",
+            description=(
+                "You arrive at **Fishing Village**, a peaceful seaside town.\n\n"
+                "An old fisherman hands you an **Old Rod**, a **Old Shovel**, "
+                "and a **Small Luck Potion**.\n\n"
+                "“The sea provides for those who are patient,” he says.\n"
+                "Your journey begins now."
+            ),
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command()
+    async def profile(self, ctx, member: discord.Member = None):
+        target = member or ctx.author
+        profile = get_user_profile(target.id)
+
+        level = profile["level"]
+        xp = profile["xp"]
+        needed = xp_needed_for_level(level)
+        coins = profile["coins"]
+        place_name = get_place_name(profile["current_place"])
+        rod = profile["equipped_rod"] or "None"
+        shovel = profile["equipped_shovel"] or "None"
+
+        boost_until = profile["luck_boost_until"]
+        if boost_until and utc_now() < boost_until:
+            boost_text = format_remaining(boost_until - utc_now())
+        else:
+            boost_text = "No active boost"
+
+        embed = discord.Embed(
+            title=f"📜 {target.display_name}'s Profile",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="Level", value=f"**{level}**", inline=True)
+        embed.add_field(name="Coins", value=f"**{coins}**", inline=True)
+        embed.add_field(name="Place", value=place_name, inline=True)
+        embed.add_field(name="XP", value=f"{xp}/{needed}\n{make_progress_bar(xp, needed)}", inline=False)
+        embed.add_field(name="Rod", value=rod.title(), inline=True)
+        embed.add_field(name="Shovel", value=shovel.title(), inline=True)
+        embed.add_field(name="Luck Boost", value=boost_text, inline=False)
+        await ctx.send(embed=embed)
+
     @commands.command(aliases=["bal", "coins", "cash"])
     async def balance(self, ctx):
-        coins = get_balance(ctx.author.id)
-        await ctx.send(f"💰 {ctx.author.mention}, you have **{coins}** coins.")
+        await ctx.send(f"💰 {ctx.author.mention}, you have **{get_balance(ctx.author.id)}** coins.")
 
     @commands.command()
     async def give(self, ctx, member: discord.Member, amount: int):
-        if member.bot:
-            await ctx.send("❌ You cannot give coins to a bot.")
+        if member.bot or member == ctx.author:
+            await ctx.send("❌ Invalid target.")
             return
-
-        if member == ctx.author:
-            await ctx.send("❌ You cannot give coins to yourself.")
-            return
-
         if amount <= 0:
             await ctx.send("❌ Amount must be greater than 0.")
             return
-
         balance = get_balance(ctx.author.id)
         if balance < amount:
             await ctx.send(f"❌ You only have **{balance}** coins.")
             return
-
         remove_balance(ctx.author.id, amount)
         add_balance(member.id, amount)
-
         await ctx.send(f"💸 {ctx.author.mention} gave **{amount}** coins to {member.mention}.")
 
     @commands.command()
     async def daily(self, ctx):
+        profile = get_user_profile(ctx.author.id)
+        if not ensure_started(profile):
+            await ctx.send("❌ Use `h!startadventure` first.")
+            return
+
         now = utc_now()
         last_daily = get_last_daily(ctx.author.id)
         cooldown = timedelta(hours=24)
 
         if last_daily and now < last_daily + cooldown:
-            remaining = (last_daily + cooldown) - now
-            await ctx.send(f"⏳ You already claimed daily. Come back in **{format_remaining(remaining)}**.")
+            await ctx.send(f"⏳ Come back in **{format_remaining((last_daily + cooldown) - now)}**.")
             return
 
         reward = random.randint(150, 300)
         add_balance(ctx.author.id, reward)
         set_last_daily(ctx.author.id, now)
 
-        await ctx.send(f"🎁 {ctx.author.mention}, you claimed **{reward}** coins from daily.")
+        await ctx.send(
+            f"🏘️ The villagers of **{get_place_name(profile['current_place'])}** thank you for helping today.\n"
+            f"You receive **{reward}** coins."
+        )
 
     @commands.command()
     async def work(self, ctx):
+        profile = get_user_profile(ctx.author.id)
+        if not ensure_started(profile):
+            await ctx.send("❌ Use `h!startadventure` first.")
+            return
+
         now = utc_now()
         last_work = get_last_work(ctx.author.id)
         cooldown = timedelta(minutes=30)
 
         if last_work and now < last_work + cooldown:
-            remaining = (last_work + cooldown) - now
-            await ctx.send(f"⏳ You are tired. Work again in **{format_remaining(remaining)}**.")
+            await ctx.send(f"⏳ Work again in **{format_remaining((last_work + cooldown) - now)}**.")
             return
 
         earned = random.randint(20, 80)
         add_balance(ctx.author.id, earned)
         set_last_work(ctx.author.id, now)
-
-        await ctx.send(f"💼 {ctx.author.mention}, you worked and earned **{earned}** coins.")
+        await ctx.send(f"🛠️ You helped around **{get_place_name(profile['current_place'])}** and earned **{earned}** coins.")
 
     @commands.command()
-    async def shop(self, ctx):
-        refreshed = refresh_shop_stock_if_needed()
-        items = get_shop_items()
+    async def shop(self, ctx, category: str = "items"):
+        refresh_shop_stock_if_needed()
 
-        if not items:
-            await ctx.send("🛒 The shop is empty.")
+        category = category.lower()
+        if category not in {"items", "rods", "shovels"}:
+            await ctx.send("❌ Use `h!shop items`, `h!shop rods`, or `h!shop shovels`.")
             return
 
-        view = ShopView(self.bot, ctx.author.id, items, refreshed=refreshed)
+        items = get_shop_items(category)
+        if not items:
+            await ctx.send("🛒 That shop is empty.")
+            return
+
+        title = {
+            "items": "🧪 Item Shop",
+            "rods": "🎣 Rod Shop",
+            "shovels": "⛏️ Shovel Shop"
+        }[category]
+
+        view = ShopView(self.bot, ctx.author.id, items, title, refreshed=False)
         await ctx.send(embed=view.make_embed(), view=view)
 
     @commands.command()
     async def buy(self, ctx, *, item_and_amount: str):
         refresh_shop_stock_if_needed()
-
         parts = item_and_amount.rsplit(" ", 1)
 
         if len(parts) == 2 and parts[1].isdigit():
@@ -217,7 +308,6 @@ class Economy(commands.Cog):
             amount = 1
 
         item_name = item_name.strip()
-
         if amount <= 0:
             await ctx.send("❌ Amount must be greater than 0.")
             return
@@ -226,67 +316,190 @@ class Economy(commands.Cog):
         if not item:
             await ctx.send("❌ That item is not in the shop.")
             return
-
         if item["stock"] < amount:
-            await ctx.send(
-                f"❌ Not enough stock. **{item['item_name'].title()}** only has **{item['stock']}** left."
-            )
+            await ctx.send(f"❌ Not enough stock. Only **{item['stock']}** left.")
             return
 
         total_cost = item["price"] * amount
-        current_balance = get_balance(ctx.author.id)
-
-        if current_balance < total_cost:
-            await ctx.send(f"❌ You need **{total_cost}** coins, but you only have **{current_balance}**.")
+        if get_balance(ctx.author.id) < total_cost:
+            await ctx.send(f"❌ You need **{total_cost}** coins.")
             return
 
-        stock_updated = reduce_shop_stock(item["item_name"], amount)
-        if not stock_updated:
+        if not reduce_shop_stock(item["item_name"], amount):
             await ctx.send("❌ Stock changed before your purchase. Try again.")
             return
 
         remove_balance(ctx.author.id, total_cost)
         add_item(ctx.author.id, item["item_name"], amount)
-
-        item_display = get_item_display(self.bot, item["item_name"])
         await ctx.send(
-            f"🛍️ You bought **{amount} {item_display} {item['item_name'].title()}** for **{total_cost}** coins."
+            f"🛍️ You bought **{amount} {get_item_display(self.bot, item['item_name'])} {item['item_name'].title()}** "
+            f"for **{total_cost}** coins."
         )
 
     @commands.command()
     async def use(self, ctx, *, item_name: str):
         item_name = item_name.strip().lower()
         owned = get_item_amount(ctx.author.id, item_name)
-
         if owned <= 0:
             await ctx.send(f"❌ You do not have any **{item_name.title()}**.")
             return
 
-        if item_name == "luck potion":
+        if item_name in POTION_DURATIONS:
             current_boost = get_luck_boost_until(ctx.author.id)
             now = utc_now()
-
             if current_boost and now < current_boost:
-                remaining = current_boost - now
                 await ctx.send(
-                    f"❌ You already have an active Luck Potion. Remaining time: **{format_remaining(remaining)}**."
+                    f"❌ You already have an active luck boost. Remaining time: "
+                    f"**{format_remaining(current_boost - now)}**."
                 )
                 return
 
-            success = remove_item(ctx.author.id, item_name, 1)
-            if not success:
+            if not remove_item(ctx.author.id, item_name, 1):
                 await ctx.send("❌ Could not use that item.")
                 return
 
-            boost_until = now + timedelta(minutes=15)
+            minutes = POTION_DURATIONS[item_name]
+            boost_until = now + timedelta(minutes=minutes)
             set_luck_boost_until(ctx.author.id, boost_until)
 
             await ctx.send(
-                f"🧪 {ctx.author.mention} used **Luck Potion**. Better fish chances for **15 minutes**!"
+                f"🧪 {ctx.author.mention} used **{item_name.title()}**. "
+                f"Fishing luck boosted for **{minutes} minutes**!"
             )
             return
 
         await ctx.send("❌ That item cannot be used right now.")
+
+    @commands.command()
+    async def fish(self, ctx):
+        profile = get_user_profile(ctx.author.id)
+        if not ensure_started(profile):
+            await ctx.send("❌ Use `h!startadventure` first.")
+            return
+
+        now = utc_now()
+        last_fish = get_last_fish(ctx.author.id)
+        cooldown = timedelta(minutes=1)
+
+        if last_fish and now < last_fish + cooldown:
+            await ctx.send(f"⏳ Fish again in **{format_remaining((last_fish + cooldown) - now)}**.")
+            return
+
+        if not profile["equipped_rod"]:
+            await ctx.send("❌ You need a rod equipped.")
+            return
+
+        set_last_fish(ctx.author.id, now)
+
+        active_boost = get_luck_boost_until(ctx.author.id)
+        boosted = active_boost is not None and now < active_boost
+
+        cast = await ctx.send(f"🎣 {ctx.author.mention} casts a line in **{get_place_name(profile['current_place'])}**...")
+        await asyncio.sleep(random.randint(3, 5))
+
+        table = BOOSTED_FISH_TABLE if boosted else NORMAL_FISH_TABLE
+        result_name, qty = roll_weighted(table)
+
+        if result_name.lower() == "nothing":
+            msg = f"🌊 {ctx.author.mention} caught **nothing**."
+            if boosted:
+                msg += " 🧪"
+            await cast.edit(content=msg)
+            return
+
+        add_item(ctx.author.id, result_name, qty)
+        xp_gain = FISH_XP[result_name.lower()] * qty
+        new_level, current_xp, leveled_up = add_xp(ctx.author.id, xp_gain)
+
+        item_display = get_item_display(self.bot, result_name)
+        msg = (
+            f"{item_display} {ctx.author.mention} caught **{qty} {result_name}** and gained **{xp_gain} XP**."
+        )
+        if boosted:
+            msg += " 🧪"
+        if leveled_up:
+            msg += f"\n🎉 You leveled up to **Level {new_level}**!"
+        await cast.edit(content=msg)
+
+    @commands.command()
+    async def dig(self, ctx):
+        profile = get_user_profile(ctx.author.id)
+        if not ensure_started(profile):
+            await ctx.send("❌ Use `h!startadventure` first.")
+            return
+
+        now = utc_now()
+        last_dig = get_last_dig(ctx.author.id)
+        cooldown = timedelta(minutes=2)
+
+        if last_dig and now < last_dig + cooldown:
+            await ctx.send(f"⏳ Dig again in **{format_remaining((last_dig + cooldown) - now)}**.")
+            return
+
+        if not profile["equipped_shovel"]:
+            await ctx.send("❌ You need a shovel equipped.")
+            return
+
+        set_last_dig(ctx.author.id, now)
+        digging = await ctx.send(f"⛏️ {ctx.author.mention} starts digging...")
+        await asyncio.sleep(random.randint(2, 4))
+
+        item_name, qty = roll_weighted(DIG_TABLE)
+        add_item(ctx.author.id, item_name, qty)
+
+        xp_gain = 5 if item_name == "trash" else 15
+        new_level, current_xp, leveled_up = add_xp(ctx.author.id, xp_gain)
+
+        msg = (
+            f"{get_item_display(self.bot, item_name)} {ctx.author.mention} dug up "
+            f"**{qty} {item_name.title()}** and gained **{xp_gain} XP**."
+        )
+        if leveled_up:
+            msg += f"\n🎉 You leveled up to **Level {new_level}**!"
+        await digging.edit(content=msg)
+
+    @commands.command()
+    async def travel(self, ctx, place_id: int):
+        profile = get_user_profile(ctx.author.id)
+        if not ensure_started(profile):
+            await ctx.send("❌ Use `h!startadventure` first.")
+            return
+
+        if place_id not in PLACES:
+            await ctx.send("❌ Invalid place number. Use 1 to 5.")
+            return
+
+        place = PLACES[place_id]
+        level = profile["level"]
+        coins = profile["coins"]
+        rod = (profile["equipped_rod"] or "").lower()
+
+        if level < place["required_level"]:
+            await ctx.send(f"❌ You need **Level {place['required_level']}**.")
+            return
+        if coins < place["required_coins"]:
+            await ctx.send(f"❌ You need **{place['required_coins']}** coins.")
+            return
+        if rod != place["required_rod"]:
+            await ctx.send(f"❌ You need **{place['required_rod'].title()}** equipped.")
+            return
+
+        set_current_place(ctx.author.id, place_id)
+        await ctx.send(
+            f"🗺️ You traveled to **{place['name']}**.\n"
+            f"{place['story']}"
+        )
+
+    @commands.command()
+    async def places(self, ctx):
+        lines = []
+        for pid, place in PLACES.items():
+            lines.append(
+                f"**{pid}. {place['name']}** — Level {place['required_level']}, "
+                f"{place['required_coins']} coins, {place['required_rod'].title()}"
+            )
+        embed = discord.Embed(title="🗺️ Adventure Places", description="\n".join(lines), color=discord.Color.blurple())
+        await ctx.send(embed=embed)
 
     @commands.command()
     async def sell(self, ctx, *, item_and_amount: str):
@@ -300,7 +513,6 @@ class Economy(commands.Cog):
             amount = 1
 
         item_name = item_name.strip().lower()
-
         if amount <= 0:
             await ctx.send("❌ Amount must be greater than 0.")
             return
@@ -316,15 +528,15 @@ class Economy(commands.Cog):
             return
 
         total = sell_price * amount
-        success = remove_item(ctx.author.id, item_name, amount)
-
-        if not success:
+        if not remove_item(ctx.author.id, item_name, amount):
             await ctx.send("❌ Could not sell that item.")
             return
 
         add_balance(ctx.author.id, total)
-        item_display = get_item_display(self.bot, item_name)
-        await ctx.send(f"💸 You sold **{amount} {item_display} {item_name.title()}** for **{total}** coins.")
+        await ctx.send(
+            f"💸 You sold **{amount} {get_item_display(self.bot, item_name)} {item_name.title()}** "
+            f"for **{total}** coins."
+        )
 
     @commands.command()
     async def sellall(self, ctx, *, item_name: str):
@@ -341,21 +553,19 @@ class Economy(commands.Cog):
             return
 
         total = sell_price * owned
-        success = remove_item(ctx.author.id, item_name, owned)
-
-        if not success:
+        if not remove_item(ctx.author.id, item_name, owned):
             await ctx.send("❌ Could not sell that item.")
             return
 
         add_balance(ctx.author.id, total)
-        item_display = get_item_display(self.bot, item_name)
-
-        await ctx.send(f"💸 You sold **all {owned} {item_display} {item_name.title()}** for **{total}** coins.")
+        await ctx.send(
+            f"💸 You sold **all {owned} {get_item_display(self.bot, item_name)} {item_name.title()}** "
+            f"for **{total}** coins."
+        )
 
     @commands.command()
     async def sellallfish(self, ctx):
         fish_rows = get_inventory_item_rows(ctx.author.id, FISH_NAMES)
-
         if not fish_rows:
             await ctx.send("❌ You have no fish to sell.")
             return
@@ -366,46 +576,30 @@ class Economy(commands.Cog):
         for row in fish_rows:
             item_name = row["item_name"].lower()
             amount = row["amount"]
-            sell_price = FISH_SELL_PRICES[item_name]
-            total_value = sell_price * amount
-
-            success = remove_item(ctx.author.id, item_name, amount)
-            if success:
-                total_coins += total_value
-                item_display = get_item_display(self.bot, item_name)
-                sold_lines.append(f"{amount}x {item_display} {item_name.title()} = {total_value} coins")
-
-        if total_coins <= 0:
-            await ctx.send("❌ Could not sell your fish.")
-            return
+            value = FISH_SELL_PRICES[item_name] * amount
+            if remove_item(ctx.author.id, item_name, amount):
+                total_coins += value
+                sold_lines.append(f"{amount}x {get_item_display(self.bot, item_name)} {item_name.title()} = {value} coins")
 
         add_balance(ctx.author.id, total_coins)
-
         embed = discord.Embed(
             title="🐟 Sold All Fish",
             description="\n".join(sold_lines),
             color=discord.Color.gold()
         )
         embed.set_footer(text=f"Total earned: {total_coins} coins")
-
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["inv"])
     async def inventory(self, ctx):
         items = get_inventory(ctx.author.id)
-
-        fish_lines = []
-        item_lines = []
-        fish_total = 0
-        item_total = 0
+        fish_lines, item_lines = [], []
+        fish_total = item_total = 0
 
         for row in items:
             item_name = row["item_name"]
             amount = row["amount"]
-            item_display = get_item_display(self.bot, item_name)
-
-            line = f"{amount}x {item_display} {item_name.title()}"
-
+            line = f"{amount}x {get_item_display(self.bot, item_name)} {item_name.title()}"
             if item_name.lower() in FISH_NAMES:
                 fish_lines.append(line)
                 fish_total += amount
@@ -413,22 +607,14 @@ class Economy(commands.Cog):
                 item_lines.append(line)
                 item_total += amount
 
-        fish_value = "\n".join(fish_lines) if fish_lines else "*No fishes in inventory*"
-        item_value = "\n".join(item_lines) if item_lines else "*No items in inventory*"
-
         embed = discord.Embed(
             title="Inventory",
-            description="Type `h!use <item>`, `h!sell <item> [amount]`, `h!sellall <item>`, or `h!sellallfish`.",
+            description="Use `h!use`, `h!sell`, `h!sellall`, `h!sellallfish`.",
             color=discord.Color.from_rgb(43, 45, 49)
         )
-
-        embed.set_author(
-            name=f"{ctx.author.display_name}'s Inventory",
-            icon_url=ctx.author.display_avatar.url
-        )
-
-        embed.add_field(name=f"Fishes ({fish_total})", value=fish_value, inline=True)
-        embed.add_field(name=f"Items ({item_total})", value=item_value, inline=True)
+        embed.set_author(name=f"{ctx.author.display_name}'s Inventory", icon_url=ctx.author.display_avatar.url)
+        embed.add_field(name=f"Fishes ({fish_total})", value="\n".join(fish_lines) if fish_lines else "*No fishes*", inline=True)
+        embed.add_field(name=f"Items ({item_total})", value="\n".join(item_lines) if item_lines else "*No items*", inline=True)
 
         chest_url = get_chest_thumbnail_url(self.bot)
         if chest_url:
@@ -436,86 +622,36 @@ class Economy(commands.Cog):
 
         await ctx.send(embed=embed)
 
-    @commands.command()
-    async def fish(self, ctx):
-        now = utc_now()
-        last_fish = get_last_fish(ctx.author.id)
-        cooldown = timedelta(minutes=1)
-
-        if last_fish and now < last_fish + cooldown:
-            remaining = (last_fish + cooldown) - now
-            await ctx.send(f"⏳ Your fishing rod is on cooldown. Fish again in **{format_remaining(remaining)}**.")
-            return
-
-        set_last_fish(ctx.author.id, now)
-
-        active_luck_boost = get_luck_boost_until(ctx.author.id)
-        use_luck = active_luck_boost is not None and now < active_luck_boost
-
-        wait_time = random.randint(3, 5)
-        cast_message = await ctx.send(f"🎣 {ctx.author.mention} cast a line... waiting for a bite.")
-        await asyncio.sleep(wait_time)
-
-        result = roll_fish(use_luck_boost=use_luck)
-
-        if result["name"] == "Nothing":
-            if use_luck:
-                await cast_message.edit(
-                    content=f"🌊 {ctx.author.mention} used luck but still caught **nothing** after **{wait_time}s**."
-                )
-            else:
-                await cast_message.edit(
-                    content=f"🌊 {ctx.author.mention} waited **{wait_time}s** and caught **nothing**."
-                )
-            return
-
-        add_item(ctx.author.id, result["name"], result["quantity"])
-
-        item_display = get_item_display(self.bot, result["name"])
-        extra = " 🧪(Luck Boost)" if use_luck else ""
-        await cast_message.edit(
-            content=(
-                f"{item_display} {ctx.author.mention} waited **{wait_time}s** and caught "
-                f"**{result['quantity']} {result['name']}**.{extra}"
-            )
-        )
-
     @commands.command(aliases=["lb"])
     async def leaderboard(self, ctx):
         rows = get_top_coin_users(10)
-
         if not rows:
             await ctx.send("No coin data yet.")
             return
 
-        embed = discord.Embed(title="🏆 Coin Leaderboard", color=discord.Color.blurple())
         lines = []
-
         for i, row in enumerate(rows, start=1):
             user = ctx.guild.get_member(int(row["user_id"]))
             name = user.display_name if user else f"User {row['user_id']}"
             lines.append(f"**{i}.** {name} — **{row['coins']}** coins")
 
-        embed.description = "\n".join(lines)
+        embed = discord.Embed(title="🏆 Coin Leaderboard", description="\n".join(lines), color=discord.Color.blurple())
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["fishlb"])
     async def fishleaderboard(self, ctx):
         rows = get_top_fish_users(10)
-
         if not rows:
             await ctx.send("No fishing data yet.")
             return
 
-        embed = discord.Embed(title="🎣 Fish Leaderboard", color=discord.Color.teal())
         lines = []
-
         for i, row in enumerate(rows, start=1):
             user = ctx.guild.get_member(int(row["user_id"]))
             name = user.display_name if user else f"User {row['user_id']}"
             lines.append(f"**{i}.** {name} — **{row['total_fish']}** fish")
 
-        embed.description = "\n".join(lines)
+        embed = discord.Embed(title="🎣 Fish Leaderboard", description="\n".join(lines), color=discord.Color.teal())
         await ctx.send(embed=embed)
 
     @buy.error
@@ -523,6 +659,7 @@ class Economy(commands.Cog):
     @sellall.error
     @give.error
     @use.error
+    @travel.error
     async def item_error(self, ctx, error):
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.send("❌ Missing required arguments.")
