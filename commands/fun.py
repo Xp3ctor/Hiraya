@@ -58,6 +58,8 @@ class Fun(commands.Cog):
                 "`shop rods`\n"
                 "`shop shovels`\n"
                 "`buy <item> [amount]`\n"
+                "`equip rod <rod name>`\n"
+                "`equip shovel <shovel name>`\n"
                 "`use <item>`\n"
                 "`sell <item> [amount]`\n"
                 "`sellall <item>`\n"
@@ -68,12 +70,26 @@ class Fun(commands.Cog):
                 "`leaderboard` / `lb`\n"
                 "`fishleaderboard` / `fishlb`"
             ),
-            inline=True
+            inline=False
         )
 
         embed.add_field(
             name="Fun",
             value="`ping`\n`hello`\n`roll`\n`8ball <question>`\n`meme`",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Admin",
+            value=(
+                "`setcoins @user <amount>`\n"
+                "`addcoins @user <amount>`\n"
+                "`giveitem @user <item> [amount]`\n"
+                "`removeitem @user <item> [amount]`\n"
+                "`addshopitem <item> <price> <category> <description>`\n"
+                "`removeshopitem <item>`\n"
+                "`resetallusers`"
+            ),
             inline=False
         )
 
