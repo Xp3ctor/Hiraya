@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 import random
-import mysql.connector
 from mysql.connector import pooling
 from discord.utils import get
 
@@ -30,6 +29,15 @@ FISH_SELL_PRICES = {
     "mythical fish": 2500
 }
 
+FISH_XP = {
+    "common fish": 5,
+    "uncommon fish": 8,
+    "rare fish": 15,
+    "epic fish": 30,
+    "legendary fish": 60,
+    "mythical fish": 120
+}
+
 FISH_EMOJI_NAMES = {
     "common fish": "commonfish",
     "uncommon fish": "uncommonfish",
@@ -42,12 +50,58 @@ FISH_EMOJI_NAMES = {
 ITEM_EMOJIS = {
     "apple": "🍎",
     "bread": "🍞",
-    "potion": "🧪",
-    "luck potion": "🧪",
-    "shield": "🛡️",
-    "sword": "⚔️",
-    "bait": "🪱",
-    "super bait": "🪱"
+    "small luck potion": "🧪",
+    "medium luck potion": "🧪",
+    "large luck potion": "🧪",
+    "old rod": "🎣",
+    "iron rod": "🎣",
+    "gold rod": "🎣",
+    "crystal rod": "🎣",
+    "mythic rod": "🎣",
+    "old shovel": "⛏️",
+    "iron shovel": "⛏️",
+    "gold shovel": "⛏️",
+    "crystal shovel": "⛏️",
+    "ancient shovel": "⛏️",
+    "trash": "🗑️"
+}
+
+PLACES = {
+    1: {
+        "name": "Fishing Village",
+        "required_level": 1,
+        "required_coins": 0,
+        "required_rod": "old rod",
+        "story": "A quiet seaside village where every journey begins."
+    },
+    2: {
+        "name": "Pebble Shore",
+        "required_level": 3,
+        "required_coins": 500,
+        "required_rod": "iron rod",
+        "story": "The waves are rougher here, but better catches await."
+    },
+    3: {
+        "name": "Coral Bay",
+        "required_level": 7,
+        "required_coins": 2500,
+        "required_rod": "gold rod",
+        "story": "Bright coral reefs hide richer fish and deeper secrets."
+    },
+    4: {
+        "name": "Sunken Cavern",
+        "required_level": 12,
+        "required_coins": 7000,
+        "required_rod": "crystal rod",
+        "story": "Dark waters and broken ruins challenge even skilled anglers."
+    },
+    5: {
+        "name": "Mythic Depths",
+        "required_level": 20,
+        "required_coins": 20000,
+        "required_rod": "mythic rod",
+        "story": "Only legends return from these waters with proof of what lives below."
+    }
 }
 
 
@@ -63,15 +117,17 @@ def format_remaining(td: timedelta):
     total_seconds = int(td.total_seconds())
     if total_seconds < 0:
         total_seconds = 0
-
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
-
     if hours > 0:
         return f"{hours}h {minutes}m {seconds}s"
     if minutes > 0:
         return f"{minutes}m {seconds}s"
     return f"{seconds}s"
+
+
+def xp_needed_for_level(level: int) -> int:
+    return 100 + ((level - 1) * 50)
 
 
 def get_storage_guild(bot):
@@ -82,12 +138,8 @@ def get_chest_thumbnail_url(bot):
     storage_guild = get_storage_guild(bot)
     if not storage_guild:
         return None
-
     chest_emoji = get(storage_guild.emojis, name=CHEST_EMOJI_NAME)
-    if chest_emoji:
-        return str(chest_emoji.url)
-
-    return None
+    return str(chest_emoji.url) if chest_emoji else None
 
 
 def get_item_display(bot, item_name: str) -> str:
@@ -103,26 +155,21 @@ def get_item_display(bot, item_name: str) -> str:
     if lower_name in ITEM_EMOJIS:
         return ITEM_EMOJIS[lower_name]
 
-    fish_fallbacks = {
-        "common fish": "🐟",
-        "uncommon fish": "🐠",
-        "rare fish": "🦈",
-        "epic fish": "🐡",
-        "legendary fish": "🐉",
-        "mythical fish": "✨"
-    }
-
-    return fish_fallbacks.get(lower_name, "📦")
+    return "📦"
 
 
 def ensure_user(user_id: int):
     conn = get_conn()
-    cur = conn.cursor(dictionary=True)
+    cur = conn.cursor()
     try:
         cur.execute(
             """
-            INSERT INTO users (user_id, coins, last_daily, last_work, last_fish, luck_boost_until)
-            VALUES (%s, 0, NULL, NULL, NULL, NULL)
+            INSERT INTO users (
+                user_id, coins, last_daily, last_work, last_fish, last_dig,
+                luck_boost_until, xp, level, adventure_started, current_place,
+                equipped_rod, equipped_shovel
+            )
+            VALUES (%s, 0, NULL, NULL, NULL, NULL, NULL, 0, 1, 0, 1, NULL, NULL)
             ON DUPLICATE KEY UPDATE user_id = user_id
             """,
             (str(user_id),)
@@ -133,17 +180,92 @@ def ensure_user(user_id: int):
         conn.close()
 
 
-def get_balance(user_id: int) -> int:
+def get_user_profile(user_id: int):
     ensure_user(user_id)
     conn = get_conn()
     cur = conn.cursor(dictionary=True)
     try:
-        cur.execute("SELECT coins FROM users WHERE user_id = %s", (str(user_id),))
-        row = cur.fetchone()
-        return row["coins"] if row else 0
+        cur.execute("SELECT * FROM users WHERE user_id = %s", (str(user_id),))
+        return cur.fetchone()
     finally:
         cur.close()
         conn.close()
+
+
+def set_user_started(user_id: int):
+    ensure_user(user_id)
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE users
+            SET adventure_started = 1,
+                current_place = 1,
+                equipped_rod = 'old rod',
+                equipped_shovel = 'old shovel'
+            WHERE user_id = %s
+            """,
+            (str(user_id),)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def reset_all_users():
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM inventory")
+        cur.execute("DELETE FROM users")
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_current_place(user_id: int, place_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE users SET current_place = %s WHERE user_id = %s", (place_id, str(user_id)))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def add_xp(user_id: int, xp_amount: int):
+    ensure_user(user_id)
+    profile = get_user_profile(user_id)
+    xp = profile["xp"] + xp_amount
+    level = profile["level"]
+    leveled_up = False
+
+    while xp >= xp_needed_for_level(level):
+        xp -= xp_needed_for_level(level)
+        level += 1
+        leveled_up = True
+
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE users SET xp = %s, level = %s WHERE user_id = %s",
+            (xp, level, str(user_id))
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+    return level, xp, leveled_up
+
+
+def get_balance(user_id: int) -> int:
+    return get_user_profile(user_id)["coins"]
 
 
 def set_balance(user_id: int, amount: int):
@@ -182,110 +304,65 @@ def remove_balance(user_id: int, amount: int):
         conn.close()
 
 
-def get_last_daily(user_id: int):
-    ensure_user(user_id)
+def _get_time_field(user_id: int, field: str):
+    profile = get_user_profile(user_id)
+    return profile[field]
+
+
+def _set_time_field(user_id: int, field: str, value):
     conn = get_conn()
-    cur = conn.cursor(dictionary=True)
+    cur = conn.cursor()
     try:
-        cur.execute("SELECT last_daily FROM users WHERE user_id = %s", (str(user_id),))
-        row = cur.fetchone()
-        return row["last_daily"] if row else None
+        cur.execute(f"UPDATE users SET {field} = %s WHERE user_id = %s", (value, str(user_id)))
+        conn.commit()
     finally:
         cur.close()
         conn.close()
+
+
+def get_last_daily(user_id: int):
+    return _get_time_field(user_id, "last_daily")
 
 
 def set_last_daily(user_id: int, value):
-    ensure_user(user_id)
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute("UPDATE users SET last_daily = %s WHERE user_id = %s", (value, str(user_id)))
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
+    _set_time_field(user_id, "last_daily", value)
 
 
 def get_last_work(user_id: int):
-    ensure_user(user_id)
-    conn = get_conn()
-    cur = conn.cursor(dictionary=True)
-    try:
-        cur.execute("SELECT last_work FROM users WHERE user_id = %s", (str(user_id),))
-        row = cur.fetchone()
-        return row["last_work"] if row else None
-    finally:
-        cur.close()
-        conn.close()
+    return _get_time_field(user_id, "last_work")
 
 
 def set_last_work(user_id: int, value):
-    ensure_user(user_id)
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute("UPDATE users SET last_work = %s WHERE user_id = %s", (value, str(user_id)))
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
+    _set_time_field(user_id, "last_work", value)
 
 
 def get_last_fish(user_id: int):
-    ensure_user(user_id)
-    conn = get_conn()
-    cur = conn.cursor(dictionary=True)
-    try:
-        cur.execute("SELECT last_fish FROM users WHERE user_id = %s", (str(user_id),))
-        row = cur.fetchone()
-        return row["last_fish"] if row else None
-    finally:
-        cur.close()
-        conn.close()
+    return _get_time_field(user_id, "last_fish")
 
 
 def set_last_fish(user_id: int, value):
-    ensure_user(user_id)
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute("UPDATE users SET last_fish = %s WHERE user_id = %s", (value, str(user_id)))
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
+    _set_time_field(user_id, "last_fish", value)
+
+
+def get_last_dig(user_id: int):
+    return _get_time_field(user_id, "last_dig")
+
+
+def set_last_dig(user_id: int, value):
+    _set_time_field(user_id, "last_dig", value)
 
 
 def get_luck_boost_until(user_id: int):
-    ensure_user(user_id)
-    conn = get_conn()
-    cur = conn.cursor(dictionary=True)
-    try:
-        cur.execute("SELECT luck_boost_until FROM users WHERE user_id = %s", (str(user_id),))
-        row = cur.fetchone()
-        return row["luck_boost_until"] if row else None
-    finally:
-        cur.close()
-        conn.close()
+    return _get_time_field(user_id, "luck_boost_until")
 
 
 def set_luck_boost_until(user_id: int, value):
-    ensure_user(user_id)
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute("UPDATE users SET luck_boost_until = %s WHERE user_id = %s", (value, str(user_id)))
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
+    _set_time_field(user_id, "luck_boost_until", value)
 
 
 def add_item(user_id: int, item_name: str, amount: int):
     ensure_user(user_id)
     item_name = item_name.lower()
-
     conn = get_conn()
     cur = conn.cursor()
     try:
@@ -305,7 +382,6 @@ def add_item(user_id: int, item_name: str, amount: int):
 
 def remove_item(user_id: int, item_name: str, amount: int):
     item_name = item_name.lower()
-
     conn = get_conn()
     cur = conn.cursor(dictionary=True)
     try:
@@ -314,16 +390,10 @@ def remove_item(user_id: int, item_name: str, amount: int):
             (str(user_id), item_name)
         )
         row = cur.fetchone()
-
-        if not row:
+        if not row or row["amount"] < amount:
             return False
 
-        current_amount = row["amount"]
-        if current_amount < amount:
-            return False
-
-        new_amount = current_amount - amount
-
+        new_amount = row["amount"] - amount
         if new_amount <= 0:
             cur.execute(
                 "DELETE FROM inventory WHERE user_id = %s AND item_name = %s",
@@ -334,7 +404,6 @@ def remove_item(user_id: int, item_name: str, amount: int):
                 "UPDATE inventory SET amount = %s WHERE user_id = %s AND item_name = %s",
                 (new_amount, str(user_id), item_name)
             )
-
         conn.commit()
         return True
     finally:
@@ -379,10 +448,8 @@ def get_inventory(user_id: int):
 def get_inventory_item_rows(user_id: int, item_names: set[str]):
     if not item_names:
         return []
-
     placeholders = ", ".join(["%s"] * len(item_names))
     params = [str(user_id)] + list(item_names)
-
     conn = get_conn()
     cur = conn.cursor(dictionary=True)
     try:
@@ -401,13 +468,24 @@ def get_inventory_item_rows(user_id: int, item_names: set[str]):
         conn.close()
 
 
-def get_shop_items():
+def get_shop_items(category=None):
     conn = get_conn()
     cur = conn.cursor(dictionary=True)
     try:
-        cur.execute(
-            "SELECT item_name, price, description, stock FROM shop ORDER BY price ASC, item_name ASC"
-        )
+        if category:
+            cur.execute(
+                """
+                SELECT item_name, price, description, stock, category
+                FROM shop
+                WHERE category = %s
+                ORDER BY price ASC, item_name ASC
+                """,
+                (category,)
+            )
+        else:
+            cur.execute(
+                "SELECT item_name, price, description, stock, category FROM shop ORDER BY price ASC, item_name ASC"
+            )
         return cur.fetchall()
     finally:
         cur.close()
@@ -419,7 +497,7 @@ def get_shop_item(item_name: str):
     cur = conn.cursor(dictionary=True)
     try:
         cur.execute(
-            "SELECT item_name, price, description, stock FROM shop WHERE item_name = %s",
+            "SELECT item_name, price, description, stock, category FROM shop WHERE item_name = %s",
             (item_name.lower(),)
         )
         return cur.fetchone()
@@ -428,19 +506,20 @@ def get_shop_item(item_name: str):
         conn.close()
 
 
-def add_shop_item(item_name: str, price: int, description: str):
+def add_shop_item(item_name: str, price: int, description: str, category: str = "items"):
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            INSERT INTO shop (item_name, price, description, stock)
-            VALUES (%s, %s, %s, 0)
+            INSERT INTO shop (item_name, price, description, stock, category)
+            VALUES (%s, %s, %s, 0, %s)
             ON DUPLICATE KEY UPDATE
                 price = VALUES(price),
-                description = VALUES(description)
+                description = VALUES(description),
+                category = VALUES(category)
             """,
-            (item_name.lower(), price, description)
+            (item_name.lower(), price, description, category)
         )
         conn.commit()
     finally:
@@ -463,10 +542,7 @@ def update_shop_stock(item_name: str, new_stock: int):
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute(
-            "UPDATE shop SET stock = %s WHERE item_name = %s",
-            (new_stock, item_name.lower())
-        )
+        cur.execute("UPDATE shop SET stock = %s WHERE item_name = %s", (new_stock, item_name.lower()))
         conn.commit()
     finally:
         cur.close()
@@ -496,10 +572,7 @@ def get_meta(meta_key: str):
     conn = get_conn()
     cur = conn.cursor(dictionary=True)
     try:
-        cur.execute(
-            "SELECT meta_value FROM bot_meta WHERE meta_key = %s",
-            (meta_key,)
-        )
+        cur.execute("SELECT meta_value FROM bot_meta WHERE meta_key = %s", (meta_key,))
         row = cur.fetchone()
         return row["meta_value"] if row else None
     finally:
@@ -545,8 +618,7 @@ def refresh_shop_stock_if_needed():
 
     shop_items = get_shop_items()
     for item in shop_items:
-        random_stock = random.randint(1, 5)
-        update_shop_stock(item["item_name"], random_stock)
+        update_shop_stock(item["item_name"], random.randint(1, 5))
 
     set_meta("last_shop_restock", now.isoformat())
     return True
@@ -554,14 +626,13 @@ def refresh_shop_stock_if_needed():
 
 def get_sell_price(item_name: str):
     item_name = item_name.lower()
-
     if item_name in FISH_SELL_PRICES:
         return FISH_SELL_PRICES[item_name]
-
     shop_item = get_shop_item(item_name)
     if shop_item:
         return max(1, shop_item["price"] // 2)
-
+    if item_name == "trash":
+        return 1
     return None
 
 
