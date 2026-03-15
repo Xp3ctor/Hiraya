@@ -9,9 +9,11 @@ from database import (
     utc_now, format_remaining, get_balance, add_balance, remove_balance,
     get_last_daily, set_last_daily, get_last_work, set_last_work,
     get_last_fish, set_last_fish, add_item, remove_item, get_item_amount,
-    get_inventory, get_shop_items, get_shop_item, get_sell_price,
+    get_inventory, get_inventory_item_rows,
+    get_shop_items, get_shop_item, get_sell_price,
     get_top_coin_users, get_top_fish_users, get_item_display,
-    get_chest_thumbnail_url
+    get_chest_thumbnail_url, refresh_shop_stock_if_needed,
+    reduce_shop_stock, FISH_NAMES, FISH_SELL_PRICES
 )
 
 FISH_TABLE = [
@@ -58,6 +60,32 @@ class Economy(commands.Cog):
         await ctx.send(f"💰 {ctx.author.mention}, you have **{coins}** coins.")
 
     @commands.command()
+    async def give(self, ctx, member: discord.Member, amount: int):
+        if member.bot:
+            await ctx.send("❌ You cannot give coins to a bot.")
+            return
+
+        if member == ctx.author:
+            await ctx.send("❌ You cannot give coins to yourself.")
+            return
+
+        if amount <= 0:
+            await ctx.send("❌ Amount must be greater than 0.")
+            return
+
+        balance = get_balance(ctx.author.id)
+        if balance < amount:
+            await ctx.send(f"❌ You only have **{balance}** coins.")
+            return
+
+        remove_balance(ctx.author.id, amount)
+        add_balance(member.id, amount)
+
+        await ctx.send(
+            f"💸 {ctx.author.mention} gave **{amount}** coins to {member.mention}."
+        )
+
+    @commands.command()
     async def daily(self, ctx):
         now = utc_now()
         last_daily = get_last_daily(ctx.author.id)
@@ -93,15 +121,20 @@ class Economy(commands.Cog):
 
     @commands.command()
     async def shop(self, ctx):
+        refreshed = refresh_shop_stock_if_needed()
         items = get_shop_items()
 
         if not items:
             await ctx.send("🛒 The shop is empty.")
             return
 
+        desc = "Available items:"
+        if refreshed:
+            desc += "\n🔄 Shop stock has been refreshed."
+
         embed = discord.Embed(
             title="🛒 Shop",
-            description="Available items:",
+            description=desc,
             color=discord.Color.green()
         )
 
@@ -109,7 +142,7 @@ class Economy(commands.Cog):
             item_display = get_item_display(self.bot, row["item_name"])
             embed.add_field(
                 name=f"{item_display} {row['item_name'].title()} - {row['price']} coins",
-                value=row["description"] if row["description"] else "No description.",
+                value=f"{row['description'] or 'No description.'}\n**Stock:** {row['stock']}",
                 inline=False
             )
 
@@ -117,6 +150,8 @@ class Economy(commands.Cog):
 
     @commands.command()
     async def buy(self, ctx, *, item_and_amount: str):
+        refresh_shop_stock_if_needed()
+
         parts = item_and_amount.rsplit(" ", 1)
 
         if len(parts) == 2 and parts[1].isdigit():
@@ -137,11 +172,22 @@ class Economy(commands.Cog):
             await ctx.send("❌ That item is not in the shop.")
             return
 
+        if item["stock"] < amount:
+            await ctx.send(
+                f"❌ Not enough stock. **{item['item_name'].title()}** only has **{item['stock']}** left."
+            )
+            return
+
         total_cost = item["price"] * amount
         current_balance = get_balance(ctx.author.id)
 
         if current_balance < total_cost:
             await ctx.send(f"❌ You need **{total_cost}** coins, but you only have **{current_balance}**.")
+            return
+
+        stock_updated = reduce_shop_stock(item["item_name"], amount)
+        if not stock_updated:
+            await ctx.send("❌ Stock changed before your purchase. Try again.")
             return
 
         remove_balance(ctx.author.id, total_cost)
@@ -192,18 +238,75 @@ class Economy(commands.Cog):
             f"💸 You sold **{amount} {item_display} {item_name.title()}** for **{total}** coins."
         )
 
+    @commands.command()
+    async def sellall(self, ctx, *, item_name: str):
+        item_name = item_name.strip().lower()
+        owned = get_item_amount(ctx.author.id, item_name)
+
+        if owned <= 0:
+            await ctx.send(f"❌ You do not have any **{item_name.title()}**.")
+            return
+
+        sell_price = get_sell_price(item_name)
+        if sell_price is None:
+            await ctx.send("❌ That item cannot be sold.")
+            return
+
+        total = sell_price * owned
+        success = remove_item(ctx.author.id, item_name, owned)
+
+        if not success:
+            await ctx.send("❌ Could not sell that item.")
+            return
+
+        add_balance(ctx.author.id, total)
+        item_display = get_item_display(self.bot, item_name)
+
+        await ctx.send(
+            f"💸 You sold **all {owned} {item_display} {item_name.title()}** for **{total}** coins."
+        )
+
+    @commands.command()
+    async def sellallfish(self, ctx):
+        fish_rows = get_inventory_item_rows(ctx.author.id, FISH_NAMES)
+
+        if not fish_rows:
+            await ctx.send("❌ You have no fish to sell.")
+            return
+
+        total_coins = 0
+        sold_lines = []
+
+        for row in fish_rows:
+            item_name = row["item_name"].lower()
+            amount = row["amount"]
+            sell_price = FISH_SELL_PRICES[item_name]
+            total_value = sell_price * amount
+
+            success = remove_item(ctx.author.id, item_name, amount)
+            if success:
+                total_coins += total_value
+                item_display = get_item_display(self.bot, item_name)
+                sold_lines.append(f"{amount}x {item_display} {item_name.title()} = {total_value} coins")
+
+        if total_coins <= 0:
+            await ctx.send("❌ Could not sell your fish.")
+            return
+
+        add_balance(ctx.author.id, total_coins)
+
+        embed = discord.Embed(
+            title="🐟 Sold All Fish",
+            description="\n".join(sold_lines),
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text=f"Total earned: {total_coins} coins")
+
+        await ctx.send(embed=embed)
+
     @commands.command(aliases=["inv"])
     async def inventory(self, ctx):
         items = get_inventory(ctx.author.id)
-
-        fish_names = {
-            "common fish",
-            "uncommon fish",
-            "rare fish",
-            "epic fish",
-            "legendary fish",
-            "mythical fish"
-        }
 
         fish_lines = []
         item_lines = []
@@ -217,7 +320,7 @@ class Economy(commands.Cog):
 
             line = f"{amount}x {item_display} {item_name.title()}"
 
-            if item_name.lower() in fish_names:
+            if item_name.lower() in FISH_NAMES:
                 fish_lines.append(line)
                 fish_total += amount
             else:
@@ -229,7 +332,7 @@ class Economy(commands.Cog):
 
         embed = discord.Embed(
             title="Inventory",
-            description="Type `h!sell <item_name> [amount]` to sell non-collectables.",
+            description="Type `h!sell <item_name> [amount]`, `h!sellall <item_name>`, or `h!sellallfish`.",
             color=discord.Color.from_rgb(43, 45, 49)
         )
 
@@ -320,9 +423,13 @@ class Economy(commands.Cog):
 
     @buy.error
     @sell.error
+    @sellall.error
+    @give.error
     async def item_error(self, ctx, error):
         if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send("❌ Usage: `h!buy <item> [amount]` or `h!sell <item> [amount]`.")
+            await ctx.send("❌ Missing required arguments.")
+        elif isinstance(error, commands.BadArgument):
+            await ctx.send("❌ Invalid argument.")
         else:
             raise error
 
