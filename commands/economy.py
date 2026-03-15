@@ -15,7 +15,8 @@ from database import (
     get_chest_thumbnail_url, refresh_shop_stock_if_needed, reduce_shop_stock,
     FISH_NAMES, FISH_SELL_PRICES, FISH_XP, get_luck_boost_until,
     set_luck_boost_until, get_user_profile, add_xp, xp_needed_for_level,
-    PLACES, set_current_place, set_user_started, get_last_dig, set_last_dig
+    PLACES, set_current_place, set_user_started, get_last_dig, set_last_dig,
+    ROD_LUCK, SHOVEL_LUCK, set_equipped_rod, set_equipped_shovel
 )
 
 POTION_DURATIONS = {
@@ -84,6 +85,85 @@ def roll_weighted(table):
 
 def get_place_name(place_id: int) -> str:
     return PLACES.get(place_id, PLACES[1])["name"]
+
+
+def get_fish_table_for_place(place_id: int, potion_active: bool, equipped_rod: str | None):
+    place = PLACES.get(place_id, PLACES[1])
+    place_bonus = place.get("luck_bonus", 0)
+    rod_bonus = ROD_LUCK.get((equipped_rod or "").lower(), 0)
+
+    common = 300
+    uncommon = 250
+    rare = 200
+    epic = 100
+    legendary = 40
+    mythical = 10
+    nothing = 100
+
+    total_bonus = place_bonus + rod_bonus
+
+    rare += total_bonus * 2
+    epic += total_bonus * 2
+    legendary += total_bonus
+    mythical += max(1, total_bonus // 3)
+    nothing = max(20, nothing - total_bonus * 2)
+
+    if potion_active:
+        rare += 30
+        epic += 20
+        legendary += 10
+        mythical += 5
+        nothing = max(10, nothing - 20)
+
+    return [
+        {"name": "Nothing",        "weight": nothing,    "quantity": (0, 0)},
+        {"name": "Common Fish",    "weight": common,     "quantity": (2, 5)},
+        {"name": "Uncommon Fish",  "weight": uncommon,   "quantity": (2, 4)},
+        {"name": "Rare Fish",      "weight": rare,       "quantity": (1, 3)},
+        {"name": "Epic Fish",      "weight": epic,       "quantity": (1, 2)},
+        {"name": "Legendary Fish", "weight": legendary,  "quantity": (1, 1)},
+        {"name": "Mythical Fish",  "weight": mythical,   "quantity": (1, 1)},
+    ]
+
+
+def get_dig_table_for_shovel(equipped_shovel: str | None):
+    shovel_bonus = SHOVEL_LUCK.get((equipped_shovel or "").lower(), 0)
+
+    trash = 500
+    apple = 120
+    bread = 80
+    small_luck = 30
+    medium_luck = 12
+    large_luck = 5
+    old_rod = 6
+    iron_rod = 3
+    old_shovel = 6
+    iron_shovel = 3
+
+    apple += shovel_bonus
+    bread += shovel_bonus
+    small_luck += max(1, shovel_bonus // 2)
+    medium_luck += max(1, shovel_bonus // 3)
+    large_luck += max(1, shovel_bonus // 6)
+    old_rod += max(1, shovel_bonus // 5)
+    iron_rod += max(1, shovel_bonus // 8)
+    old_shovel += max(1, shovel_bonus // 5)
+    iron_shovel += max(1, shovel_bonus // 8)
+
+    trash = max(150, trash - shovel_bonus * 8)
+
+    return [
+        {"name": "trash", "weight": trash, "quantity": (1, 3)},
+        {"name": "apple", "weight": apple, "quantity": (1, 2)},
+        {"name": "bread", "weight": bread, "quantity": (1, 2)},
+        {"name": "small luck potion", "weight": small_luck, "quantity": (1, 1)},
+        {"name": "medium luck potion", "weight": medium_luck, "quantity": (1, 1)},
+        {"name": "large luck potion", "weight": large_luck, "quantity": (1, 1)},
+        {"name": "old rod", "weight": old_rod, "quantity": (1, 1)},
+        {"name": "iron rod", "weight": iron_rod, "quantity": (1, 1)},
+        {"name": "old shovel", "weight": old_shovel, "quantity": (1, 1)},
+        {"name": "iron shovel", "weight": iron_shovel, "quantity": (1, 1)},
+    ]
 
 
 class ShopView(discord.ui.View):
@@ -188,6 +268,8 @@ class Economy(commands.Cog):
         place_name = get_place_name(profile["current_place"])
         rod = profile["equipped_rod"] or "None"
         shovel = profile["equipped_shovel"] or "None"
+        rod_bonus = ROD_LUCK.get(rod.lower(), 0) if rod != "None" else 0
+        shovel_bonus = SHOVEL_LUCK.get(shovel.lower(), 0) if shovel != "None" else 0
 
         boost_until = profile["luck_boost_until"]
         if boost_until and utc_now() < boost_until:
@@ -203,8 +285,8 @@ class Economy(commands.Cog):
         embed.add_field(name="Coins", value=f"**{coins}**", inline=True)
         embed.add_field(name="Place", value=place_name, inline=True)
         embed.add_field(name="XP", value=f"{xp}/{needed}\n{make_progress_bar(xp, needed)}", inline=False)
-        embed.add_field(name="Rod", value=rod.title(), inline=True)
-        embed.add_field(name="Shovel", value=shovel.title(), inline=True)
+        embed.add_field(name="Rod", value=f"{rod.title()} (+{rod_bonus}% fishing luck)", inline=True)
+        embed.add_field(name="Shovel", value=f"{shovel.title()} (+{shovel_bonus}% dig luck)", inline=True)
         embed.add_field(name="Luck Boost", value=boost_text, inline=False)
         await ctx.send(embed=embed)
 
@@ -337,6 +419,40 @@ class Economy(commands.Cog):
         )
 
     @commands.command()
+    async def equip(self, ctx, slot: str, *, item_name: str):
+        profile = get_user_profile(ctx.author.id)
+        if not ensure_started(profile):
+            await ctx.send("❌ Use `h!startadventure` first.")
+            return
+
+        slot = slot.lower().strip()
+        item_name = item_name.lower().strip()
+
+        if slot == "rod":
+            if item_name not in ROD_LUCK:
+                await ctx.send("❌ That is not a valid rod.")
+                return
+            if get_item_amount(ctx.author.id, item_name) <= 0:
+                await ctx.send(f"❌ You do not own **{item_name.title()}**.")
+                return
+            set_equipped_rod(ctx.author.id, item_name)
+            await ctx.send(f"🎣 Equipped **{item_name.title()}**. Fishing luck: **+{ROD_LUCK[item_name]}%**.")
+            return
+
+        if slot == "shovel":
+            if item_name not in SHOVEL_LUCK:
+                await ctx.send("❌ That is not a valid shovel.")
+                return
+            if get_item_amount(ctx.author.id, item_name) <= 0:
+                await ctx.send(f"❌ You do not own **{item_name.title()}**.")
+                return
+            set_equipped_shovel(ctx.author.id, item_name)
+            await ctx.send(f"⛏️ Equipped **{item_name.title()}**. Dig luck: **+{SHOVEL_LUCK[item_name]}%**.")
+            return
+
+        await ctx.send("❌ Use `h!equip rod <rod name>` or `h!equip shovel <shovel name>`.")
+
+    @commands.command()
     async def use(self, ctx, *, item_name: str):
         item_name = item_name.strip().lower()
         owned = get_item_amount(ctx.author.id, item_name)
@@ -385,25 +501,35 @@ class Economy(commands.Cog):
             await ctx.send(f"⏳ Fish again in **{format_remaining((last_fish + cooldown) - now)}**.")
             return
 
-        if not profile["equipped_rod"]:
+        equipped_rod = profile["equipped_rod"]
+        if not equipped_rod:
             await ctx.send("❌ You need a rod equipped.")
             return
 
         set_last_fish(ctx.author.id, now)
 
         active_boost = get_luck_boost_until(ctx.author.id)
-        boosted = active_boost is not None and now < active_boost
+        potion_active = active_boost is not None and now < active_boost
+        place_id = profile["current_place"]
+        place = PLACES.get(place_id, PLACES[1])
+        rod_bonus = ROD_LUCK.get((equipped_rod or "").lower(), 0)
 
-        cast = await ctx.send(f"🎣 {ctx.author.mention} casts a line in **{get_place_name(profile['current_place'])}**...")
+        cast = await ctx.send(
+            f"🎣 {ctx.author.mention} casts a line in **{place['name']}**...\n"
+            f"✨ Place Luck: **+{place['luck_bonus']}%** | Rod Luck: **+{rod_bonus}%**"
+        )
         await asyncio.sleep(random.randint(3, 5))
 
-        table = BOOSTED_FISH_TABLE if boosted else NORMAL_FISH_TABLE
-        result_name, qty = roll_weighted(table)
+        fish_table = get_fish_table_for_place(place_id, potion_active, equipped_rod)
+        result_name, qty = roll_weighted(fish_table)
 
         if result_name.lower() == "nothing":
-            msg = f"🌊 {ctx.author.mention} caught **nothing**."
-            if boosted:
-                msg += " 🧪"
+            msg = (
+                f"🌊 {ctx.author.mention} caught **nothing** in **{place['name']}**.\n"
+                f"✨ Place Luck: **+{place['luck_bonus']}%** | Rod Luck: **+{rod_bonus}%**"
+            )
+            if potion_active:
+                msg += "\n🧪 Luck Potion Active"
             await cast.edit(content=msg)
             return
 
@@ -411,14 +537,19 @@ class Economy(commands.Cog):
         xp_gain = FISH_XP[result_name.lower()] * qty
         new_level, current_xp, leveled_up = add_xp(ctx.author.id, xp_gain)
 
-        item_display = get_item_display(self.bot, result_name)
         msg = (
-            f"{item_display} {ctx.author.mention} caught **{qty} {result_name}** and gained **{xp_gain} XP**."
+            f"{get_item_display(self.bot, result_name)} {ctx.author.mention} caught "
+            f"**{qty} {result_name}** in **{place['name']}**\n"
+            f"✨ Place Luck: **+{place['luck_bonus']}%** | Rod Luck: **+{rod_bonus}%**\n"
+            f"📘 Gained **{xp_gain} XP**"
         )
-        if boosted:
-            msg += " 🧪"
+
+        if potion_active:
+            msg += "\n🧪 Luck Potion Active"
+
         if leveled_up:
             msg += f"\n🎉 You leveled up to **Level {new_level}**!"
+
         await cast.edit(content=msg)
 
     @commands.command()
@@ -436,15 +567,22 @@ class Economy(commands.Cog):
             await ctx.send(f"⏳ Dig again in **{format_remaining((last_dig + cooldown) - now)}**.")
             return
 
-        if not profile["equipped_shovel"]:
+        equipped_shovel = profile["equipped_shovel"]
+        if not equipped_shovel:
             await ctx.send("❌ You need a shovel equipped.")
             return
 
         set_last_dig(ctx.author.id, now)
-        digging = await ctx.send(f"⛏️ {ctx.author.mention} starts digging...")
+        shovel_bonus = SHOVEL_LUCK.get((equipped_shovel or "").lower(), 0)
+
+        digging = await ctx.send(
+            f"⛏️ {ctx.author.mention} starts digging...\n"
+            f"✨ Shovel Luck: **+{shovel_bonus}%**"
+        )
         await asyncio.sleep(random.randint(2, 4))
 
-        item_name, qty = roll_weighted(DIG_TABLE)
+        dig_table = get_dig_table_for_shovel(equipped_shovel)
+        item_name, qty = roll_weighted(dig_table)
         add_item(ctx.author.id, item_name, qty)
 
         xp_gain = 5 if item_name == "trash" else 15
@@ -452,10 +590,14 @@ class Economy(commands.Cog):
 
         msg = (
             f"{get_item_display(self.bot, item_name)} {ctx.author.mention} dug up "
-            f"**{qty} {item_name.title()}** and gained **{xp_gain} XP**."
+            f"**{qty} {item_name.title()}**\n"
+            f"✨ Shovel Luck: **+{shovel_bonus}%**\n"
+            f"📘 Gained **{xp_gain} XP**"
         )
+
         if leveled_up:
             msg += f"\n🎉 You leveled up to **Level {new_level}**!"
+
         await digging.edit(content=msg)
 
     @commands.command()
@@ -487,7 +629,8 @@ class Economy(commands.Cog):
         set_current_place(ctx.author.id, place_id)
         await ctx.send(
             f"🗺️ You traveled to **{place['name']}**.\n"
-            f"{place['story']}"
+            f"{place['story']}\n"
+            f"✨ This place gives **+{place['luck_bonus']}% fishing luck**."
         )
 
     @commands.command()
@@ -495,10 +638,18 @@ class Economy(commands.Cog):
         lines = []
         for pid, place in PLACES.items():
             lines.append(
-                f"**{pid}. {place['name']}** — Level {place['required_level']}, "
-                f"{place['required_coins']} coins, {place['required_rod'].title()}"
+                f"**{pid}. {place['name']}** — "
+                f"Level {place['required_level']}, "
+                f"{place['required_coins']} coins, "
+                f"{place['required_rod'].title()}, "
+                f"Luck **+{place['luck_bonus']}%**"
             )
-        embed = discord.Embed(title="🗺️ Adventure Places", description="\n".join(lines), color=discord.Color.blurple())
+
+        embed = discord.Embed(
+            title="🗺️ Adventure Places",
+            description="\n".join(lines),
+            color=discord.Color.blurple()
+        )
         await ctx.send(embed=embed)
 
     @commands.command()
@@ -609,7 +760,7 @@ class Economy(commands.Cog):
 
         embed = discord.Embed(
             title="Inventory",
-            description="Use `h!use`, `h!sell`, `h!sellall`, `h!sellallfish`.",
+            description="Use `h!equip rod <name>`, `h!equip shovel <name>`, `h!use`, `h!sell`, `h!sellall`, `h!sellallfish`.",
             color=discord.Color.from_rgb(43, 45, 49)
         )
         embed.set_author(name=f"{ctx.author.display_name}'s Inventory", icon_url=ctx.author.display_avatar.url)
@@ -660,6 +811,7 @@ class Economy(commands.Cog):
     @give.error
     @use.error
     @travel.error
+    @equip.error
     async def item_error(self, ctx, error):
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.send("❌ Missing required arguments.")
