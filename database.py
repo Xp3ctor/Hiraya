@@ -39,6 +39,17 @@ FISH_EMOJI_NAMES = {
     "mythical fish": "mythicalfish"
 }
 
+ITEM_EMOJIS = {
+    "apple": "🍎",
+    "bread": "🍞",
+    "potion": "🧪",
+    "luck potion": "🧪",
+    "shield": "🛡️",
+    "sword": "⚔️",
+    "bait": "🪱",
+    "super bait": "🪱"
+}
+
 
 def get_conn():
     return db_pool.get_connection()
@@ -89,6 +100,9 @@ def get_item_display(bot, item_name: str) -> str:
             if emoji_obj:
                 return str(emoji_obj)
 
+    if lower_name in ITEM_EMOJIS:
+        return ITEM_EMOJIS[lower_name]
+
     fish_fallbacks = {
         "common fish": "🐟",
         "uncommon fish": "🐠",
@@ -107,8 +121,8 @@ def ensure_user(user_id: int):
     try:
         cur.execute(
             """
-            INSERT INTO users (user_id, coins, last_daily, last_work, last_fish)
-            VALUES (%s, 0, NULL, NULL, NULL)
+            INSERT INTO users (user_id, coins, last_daily, last_work, last_fish, luck_boost_until)
+            VALUES (%s, 0, NULL, NULL, NULL, NULL)
             ON DUPLICATE KEY UPDATE user_id = user_id
             """,
             (str(user_id),)
@@ -237,6 +251,31 @@ def set_last_fish(user_id: int, value):
     cur = conn.cursor()
     try:
         cur.execute("UPDATE users SET last_fish = %s WHERE user_id = %s", (value, str(user_id)))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_luck_boost_until(user_id: int):
+    ensure_user(user_id)
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute("SELECT luck_boost_until FROM users WHERE user_id = %s", (str(user_id),))
+        row = cur.fetchone()
+        return row["luck_boost_until"] if row else None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_luck_boost_until(user_id: int, value):
+    ensure_user(user_id)
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE users SET luck_boost_until = %s WHERE user_id = %s", (value, str(user_id)))
         conn.commit()
     finally:
         cur.close()
